@@ -10,11 +10,25 @@
 class GradifyExtension extends DataExtension
 {
 
+	private static $db = array(
+		'GradifyCache'			=> 'Text'
+	);
+
 	private static $sensitivity = 7;
 	private static $bw_sensitivity = 4;
 	private static $ignore_colors = array(
-		'0.0.0',
-		'255.255.255'
+		'0,0,0',
+		'255,255,255'
+	);
+
+	private $browserPrefixes = ["","-webkit-", "-moz-", "-o-", "-ms-"];
+
+	private $directionMap = array(
+		'0'			=> 'right top',
+		'270'		=> 'right bottom',
+		'180'		=> 'left bottom',
+		'360'		=> 'right top',
+		'90'		=> 'left top',
 	);
 
 
@@ -23,39 +37,68 @@ class GradifyExtension extends DataExtension
 	public function Gradify()
 	{
 		$image = $this->owner;
-		$originalPath = $image->getFullPath();
-		$extension = $image->getExtension();
-		$gradifyPath = str_replace('.' . $extension, 'gradify.' . $extension, $originalPath);
+		if($image->exists()) {
+			$cache = $image->GradifyCache;
+			$arrGradify = array();
+			if ($cache) {
+				$arrGradify = unserialize($cache);
+			}
 
-		$this->getResource();
+			$originalPath = $image->getFullPath();
+			$extension = $image->getExtension();
+			$key = md5($originalPath);
 
+			if (!isset($arrGradify[$key])) {
+				$this->getResource();
+				$colors = $this->handleImage();
+				$selectColors = $this->selectColors($colors);
+				$quads = $this->getQuads($colors, $selectColors);
+				$css = $this->makeCSS($quads);
 
-		$colors = $this->handleImage();
-		$selectColors = $this->selectColors($colors);
+				$arrGradify[$key] = $css;
+				$this->owner->GradifyCache = serialize($arrGradify);
+				$this->owner->write();
+			}
 
-
-		$image=gradient(array('#000000', '#FFFFFF', '#FF0000', '#0000FF'));
-
-		header('Content-type: image/png');
-		imagepng($image);
-		imagedestroy($image);
-		die();
-
-		$quads = $this->getQuads($colors, $selectColors);
+			return $arrGradify[$key];
+		}
 
 	}
 
 
-	function gradient($colors, $hex=true)
-	{
-		$im = imagecreatetruecolor($this->owner->getWidth(), $this->owner->getHeight());
-	}
 
 	public function setImageResource($resource)
 	{
 		$this->resource = $resource;
 	}
 
+	public function makeCSS($quads)
+	{
+		$css = array();
+		$compiled = array();
+		foreach ($this->browserPrefixes as $prefix) {
+			$arr = array();
+			foreach($quads as $quad) {
+				$color = $quad[0];
+				$angle = $quad[1];
+
+				if($color) {
+					$oddDir = $this->directionMap[(90 + $angle + 180) % 360]; //  "right top";
+					$arr[] = $prefix . "linear-gradient({$oddDir}, rgba($color, 0) 0%, rgba($color, 1) 100%)";
+				}
+			}
+			$css[$prefix] = implode(',', $arr);
+		}
+
+
+		$styles = "";
+		foreach ($css as $line) {
+			$styles .= "background: $line;";
+		}
+
+		return $styles; // "<div style='width: 100px; height: 100px; $styles'></div>";
+
+	}
 
 	public function getResource()
 	{
@@ -85,8 +128,8 @@ class GradifyExtension extends DataExtension
 
 	public function getColorDiff($color1, $color2)
 	{
-		$aColor1 = explode('.', $color1);
-		$aColor2 = explode('.', $color2);
+		$aColor1 = explode(',', $color1);
+		$aColor2 = explode(',', $color2);
 
 		return sqrt(abs(1.4 * sqrt(abs($aColor1[0] - $aColor2[0]))))
 			+ 0.8 * sqrt(abs($aColor1[1] - $aColor2[1]))
@@ -96,7 +139,6 @@ class GradifyExtension extends DataExtension
 
 	public function getQuads($colors, $selectColors)
 	{
-
 		$quadCombo = array(0,0,0,0);
 		$takenPos = array(0,0,0,0);
 		// Keep track of most dominated quads for each col.
@@ -125,9 +167,13 @@ class GradifyExtension extends DataExtension
 			$selectedCounter = 0;
 			foreach($selectColors as $selectedColor) {
 				if($this->getColorDiff($color, $selectedColor) < 4.3) {
-					$xq = floor(($colorCounter)%60/30);
-					$yq = floor(($colorCounter)%60*60);
-					$quad[$selectedCounter][$xq][$yq] += 1;
+					$xq = floor(($colorCounter % 60) / 30);
+					$yq = round( ($colorCounter) / (60*60) );
+
+
+					if($xq <= 1 && $yq <= 1) {
+						$quad[$selectedCounter][$xq][$yq] += 1;
+					}
 
 				}
 				$selectedCounter += 1;
@@ -135,6 +181,7 @@ class GradifyExtension extends DataExtension
 			$colorCounter += 1;
 		}
 
+		
 		$selectedCounter = 0;
 		foreach($selectColors as $selectColor) {
 			$quadArr = [];
@@ -143,15 +190,39 @@ class GradifyExtension extends DataExtension
 			$quadArr[2] = $quad[$selectedCounter][1][1];
 			$quadArr[3] = $quad[$selectedCounter][0][1];
 			$found = false;
-			
+
 			$j = 0;
-			//while(!$found) {
-				// var best_choice = quadArr.indexOf(Math.max.apply(Math, quadArr));
-			//}
+			$k = 0;
+			while(!$found && $k < 1000) {
+				$max = max($quadArr);
+				$choice = array_search($max, $quadArr);
 
-
+				if ($max == 0) {
+					$zeroIndex = array_search(0, $quadCombo);
+					$quadCombo[$zeroIndex] = array(
+						$selectColor,
+						90 * $zeroIndex
+					);
+					$found = true;
+				}
+				if ($takenPos[$choice] == 0) {
+					$quadCombo[$selectedCounter] = array(
+						$selectColor,
+						90 * $choice
+					);
+					$takenPos[$choice] = 1;
+					$found = true;
+					break;
+				}
+				else {
+					$quadArr[$choice] = 0;
+				}
+				$k += 1;
+			}
 			$selectedCounter += 1;
 		}
+
+		return $quadCombo;
 
 	}
 
@@ -223,13 +294,21 @@ class GradifyExtension extends DataExtension
 				$r = ($color >> 16) & 0xFF;
 				$g = ($color >> 8) & 0xFF;
 				$b = $color & 0xFF;
-				$rgb = "{$r}.{$g}.{$b}";
+				$rgb = "{$r},{$g},{$b}";
 				if(isset($colors[$rgb])){
 					$colors[$rgb] += 1;
 				}
 				else {
 					$colors[$rgb] = 0;
 				}
+
+				if(count($colors) == 2000) {
+					break;
+				}
+
+			}
+			if(count($colors) == 2000) {
+				break;
 			}
 		}
 		arsort($colors);
