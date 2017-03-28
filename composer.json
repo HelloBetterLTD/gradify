@@ -1,0 +1,18 @@
+{
+  "name": "silverstripers/gradify",
+  "description": "Gradify php implementation SilverStirpe",
+  "type": "silverstripe-module",
+  "keywords": ["silverstripe", "images", "gradify"],
+  "authors": [
+    {
+      "name": "Nivanka Fonseka",
+      "email": "nivanka@silverstripers.com"
+    }
+  ],
+  "require": {
+    "silverstripe/framework"        : "3.*",
+  },
+  "extra": {
+    "installer-name": "gradify"
+  }
+}
